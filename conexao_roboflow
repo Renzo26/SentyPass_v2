@@ -1,0 +1,24 @@
+# 1. Import the library
+from inference_sdk import InferenceHTTPClient
+
+# 2. Connect to your workflow
+client = InferenceHTTPClient(
+    api_url="https://serverless.roboflow.com",
+    api_key="tijqy0mmvyqZXIWEUB99"
+)
+
+# 3. Run your workflow on an image
+result = client.run_workflow(
+    workspace_name="llativo",
+    workflow_id="custom-workflow-5",
+    images={
+        "image": "YOUR_IMAGE.jpg" # Path to your image file
+    },
+    parameters={
+        "Classes": "PPE, vest"
+    },
+    use_cache=True # Speeds up repeated requests
+)
+
+# 4. Get your results
+print(result)
