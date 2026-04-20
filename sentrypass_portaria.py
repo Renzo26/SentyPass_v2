@@ -169,6 +169,13 @@ def ocr_plate(reader: easyocr.Reader, crop_cv: "np.ndarray") -> str:
     return best
 
 
+def _levenshtein(a: str, b: str) -> int:
+    """Distância de edição entre duas strings."""
+    if len(a) != len(b):
+        return abs(len(a) - len(b)) + sum(x != y for x, y in zip(a, b[:len(a)]))
+    return sum(x != y for x, y in zip(a, b))
+
+
 _DIGIT_LIKE = str.maketrans("OISZDGB", "0152068")  # letra → dígito (D e O → 0)
 _LETTER_LIKE = str.maketrans("015268", "OISZGB")   # dígito → letra
 
@@ -642,9 +649,12 @@ class SentryPassApp(ctk.CTk):
         return resp.json()
 
     def _check_database(self, plate: str) -> dict:
-        """Verifica se a placa está cadastrada no Supabase."""
+        """Verifica se a placa está cadastrada no Supabase.
+        Tenta correspondência exata primeiro; se falhar, usa fuzzy (distância ≤ 1).
+        """
         for table in VEHICLES_TABLES:
             for col in PLATE_COLUMNS:
+                # 1. Correspondência exata
                 try:
                     resp = (
                         self._supabase
@@ -654,12 +664,34 @@ class SentryPassApp(ctk.CTk):
                         .execute()
                     )
                     if resp.data:
-                        return {
-                            "allowed": True,
-                            "data": resp.data[0],
-                            "table": table,
-                            "column": col
-                        }
+                        return {"allowed": True, "data": resp.data[0],
+                                "table": table, "column": col, "fuzzy": False}
+                except Exception:
+                    continue
+
+                # 2. Fuzzy: busca todas as placas e compara por distância de edição
+                try:
+                    all_resp = (
+                        self._supabase
+                        .table(table)
+                        .select(col)
+                        .execute()
+                    )
+                    for row in (all_resp.data or []):
+                        candidate = str(row.get(col, "")).upper().strip()
+                        if _levenshtein(plate, candidate) == 1:
+                            full = (
+                                self._supabase
+                                .table(table)
+                                .select("*")
+                                .ilike(col, candidate)
+                                .execute()
+                            )
+                            if full.data:
+                                return {"allowed": True, "data": full.data[0],
+                                        "table": table, "column": col,
+                                        "fuzzy": True, "ocr": plate,
+                                        "matched": candidate}
                 except Exception:
                     continue
 
@@ -690,6 +722,11 @@ class SentryPassApp(ctk.CTk):
             )
             data = vehicle_info["data"]
             lines = ["Veículo cadastrado no sistema:\n"]
+            if vehicle_info.get("fuzzy"):
+                lines.append(
+                    f"  ⚠ OCR leu '{vehicle_info['ocr']}' → "
+                    f"correspondência aproximada com '{vehicle_info['matched']}'\n"
+                )
             skip = {"id", "created_at", "updated_at", "user_id"}
             for k, v in data.items():
                 if k not in skip and v is not None:
