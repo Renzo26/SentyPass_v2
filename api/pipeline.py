@@ -41,15 +41,29 @@ VEHICLES_TABLES = ["veiculos"]
 PLATE_COLUMNS = ["placa"]
 
 # ─── CLIENTES (singletons lazy) ─────────────────────────────
-_supabase: Client | None = None
+# Dois clientes separados de propósito:
+#  - _supabase_auth: usado no login (sign_in_with_password). Ao logar, a sessão
+#    do usuário fica anexada a ESTE cliente.
+#  - _supabase_db: usado nas consultas (perfis/veiculos). Nunca faz login, então
+#    mantém SEMPRE a credencial do SUPABASE_KEY. Com a chave service_role isso
+#    ignora RLS e a consulta funciona de forma confiável, sem depender de login.
+_supabase_auth: Client | None = None
+_supabase_db: Client | None = None
 _ocr: easyocr.Reader | None = None
 
 
-def get_supabase() -> Client:
-    global _supabase
-    if _supabase is None:
-        _supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
-    return _supabase
+def get_supabase_auth() -> Client:
+    global _supabase_auth
+    if _supabase_auth is None:
+        _supabase_auth = create_client(SUPABASE_URL, SUPABASE_KEY)
+    return _supabase_auth
+
+
+def get_supabase_db() -> Client:
+    global _supabase_db
+    if _supabase_db is None:
+        _supabase_db = create_client(SUPABASE_URL, SUPABASE_KEY)
+    return _supabase_db
 
 
 def get_ocr() -> easyocr.Reader:
@@ -253,21 +267,89 @@ def call_roboflow(image_path: str) -> object:
     return resp.json()
 
 
-def detect_and_read(image_path: str) -> tuple[str, np.ndarray | None]:
-    """Detecta a placa (Roboflow) e lê o texto (EasyOCR) a partir de uma imagem."""
+# Placa BR válida após normalização: LLLNNNN (antigo) ou LLLNLNN (Mercosul).
+_PLATE_RE = re.compile(r"^[A-Z]{3}\d[A-Z0-9]\d{2}$")
+
+
+def is_valid_plate(text: str) -> bool:
+    return bool(_PLATE_RE.match(text or ""))
+
+
+def extract_ocr_texts(result: object) -> list[str]:
+    """Procura, na resposta do Roboflow, strings que pareçam placa.
+    Cobre workflows que já incluem um bloco de OCR/reconhecimento — nesse caso
+    o texto vem mais preciso que o EasyOCR genérico.
+    """
+    texts: list[str] = []
+
+    def walk(obj):
+        if isinstance(obj, dict):
+            for v in obj.values():
+                walk(v)
+        elif isinstance(obj, list):
+            for item in obj:
+                walk(item)
+        elif isinstance(obj, str):
+            cand = normalize_plate(obj)
+            if is_valid_plate(cand):
+                texts.append(cand)
+
+    walk(result)
+    return texts
+
+
+def read_plate_candidates(image_path: str) -> tuple[list[str], np.ndarray | None]:
+    """Lê uma imagem e retorna TODAS as leituras candidatas de placa.
+    Fontes: (1) texto que o workflow do Roboflow retornar, (2) EasyOCR no
+    recorte. As candidatas alimentam a votação multi-frame em analyze_images.
+    """
     result = call_roboflow(image_path)
+
+    candidates: list[str] = []
+    # (1) Texto do próprio Roboflow (se o workflow tiver OCR) — peso maior.
+    roboflow_texts = extract_ocr_texts(result)
+    candidates.extend(roboflow_texts)
+    candidates.extend(roboflow_texts)  # peso 2: leitura de modelo treinado
+
+    crop_cv: np.ndarray | None = None
     preds = extract_predictions(result)
-    if not preds:
-        return "", None
+    if preds:
+        best = max(preds, key=lambda p: float(p.get("confidence", 0)))
+        img_cv = cv2.imread(image_path)
+        crop_cv = crop_plate(img_cv, best)
+        if crop_cv is not None:
+            # (2) EasyOCR no recorte detectado.
+            easy = ocr_plate(get_ocr(), crop_cv)
+            if easy:
+                candidates.append(easy)
 
-    best = max(preds, key=lambda p: float(p.get("confidence", 0)))
-    img_cv = cv2.imread(image_path)
-    crop_cv = crop_plate(img_cv, best)
-    if crop_cv is None:
-        return "", None
+    return candidates, crop_cv
 
-    plate_text = ocr_plate(get_ocr(), crop_cv)
-    return plate_text, crop_cv
+
+def detect_and_read(image_path: str) -> tuple[str, np.ndarray | None]:
+    """Compat: melhor leitura única de uma imagem."""
+    candidates, crop_cv = read_plate_candidates(image_path)
+    best = _vote_best(candidates)
+    return best, crop_cv
+
+
+def _vote_best(candidates: list[str]) -> str:
+    """Escolhe a placa final por votação.
+    Prioriza candidatas com formato BR válido; desempata por frequência e,
+    em seguida, por comprimento (leitura mais completa).
+    """
+    if not candidates:
+        return ""
+
+    valid = [c for c in candidates if is_valid_plate(c)]
+    pool = valid if valid else candidates
+
+    counts: dict[str, int] = {}
+    for c in pool:
+        counts[c] = counts.get(c, 0) + 1
+
+    # Mais votado; empate → mais longo; empate → ordem alfabética estável.
+    return max(counts, key=lambda c: (counts[c], len(c), c))
 
 
 # ─── SUPABASE ───────────────────────────────────────────────
@@ -276,7 +358,7 @@ def check_database(plate: str) -> dict:
     """Verifica se a placa está cadastrada no Supabase.
     Exata primeiro; se falhar, fuzzy (distância de edição <= 1).
     """
-    sb = get_supabase()
+    sb = get_supabase_db()
     for table in VEHICLES_TABLES:
         for col in PLATE_COLUMNS:
             try:
@@ -313,9 +395,9 @@ def login_porteiro(email: str, senha: str) -> dict:
     """Autentica no Supabase e valida que o perfil é 'Porteiro'.
     Mesma regra do app desktop (sentrypass_portaria.py).
     """
-    sb = get_supabase()
+    auth = get_supabase_auth()
     try:
-        resp = sb.auth.sign_in_with_password({"email": email, "password": senha})
+        resp = auth.auth.sign_in_with_password({"email": email, "password": senha})
     except Exception as e:
         return {"ok": False, "error": f"Erro: {e}"}
 
@@ -324,7 +406,7 @@ def login_porteiro(email: str, senha: str) -> dict:
 
     try:
         perfil = (
-            sb.table("perfis").select("tipo")
+            get_supabase_db().table("perfis").select("tipo")
             .eq("id", resp.user.id).single().execute()
         )
         tipo = perfil.data.get("tipo", "") if perfil.data else ""
@@ -333,7 +415,7 @@ def login_porteiro(email: str, senha: str) -> dict:
 
     if tipo != "Porteiro":
         try:
-            sb.auth.sign_out()
+            auth.auth.sign_out()
         except Exception:
             pass
         return {"ok": False, "error": "Acesso negado. Perfil não é Porteiro."}
@@ -359,38 +441,57 @@ def _map_veiculo(data: dict) -> dict:
     return veiculo
 
 
-def analyze_image_bytes(image_bytes: bytes) -> dict:
-    """Pipeline completo a partir dos bytes de uma imagem.
-    Retorna o shape consumido pelo frontend (PlateResult, sem 'imagem').
-    """
-    tmp = tempfile.NamedTemporaryFile(suffix=".jpg", delete=False)
-    try:
-        tmp.write(image_bytes)
-        tmp.flush()
-        tmp.close()
+def _build_result(plate_text: str) -> dict:
+    info = check_database(plate_text)
+    if info["allowed"]:
+        result = {
+            "placa": info.get("matched") or plate_text,
+            "liberado": True,
+            "fuzzy": bool(info.get("fuzzy")),
+            "veiculo": _map_veiculo(info["data"]),
+        }
+        if info.get("fuzzy"):
+            result["placaOriginalOcr"] = info.get("ocr", plate_text)
+        return result
+    return {"placa": plate_text, "liberado": False}
 
-        plate_text, _crop = detect_and_read(tmp.name)
+
+def analyze_images_bytes(images: list[bytes]) -> dict:
+    """Pipeline multi-frame: lê várias fotos do mesmo veículo, junta todas as
+    leituras candidatas (Roboflow + EasyOCR de cada frame) e vota na placa
+    final. Retorna o shape consumido pelo frontend (PlateResult, sem 'imagem').
+    """
+    all_candidates: list[str] = []
+    tmp_paths: list[str] = []
+    try:
+        for image_bytes in images:
+            tmp = tempfile.NamedTemporaryFile(suffix=".jpg", delete=False)
+            tmp.write(image_bytes)
+            tmp.flush()
+            tmp.close()
+            tmp_paths.append(tmp.name)
+            try:
+                cands, _crop = read_plate_candidates(tmp.name)
+                all_candidates.extend(cands)
+            except Exception:
+                continue
+
+        plate_text = _vote_best(all_candidates)
         if not plate_text:
             return {"error": "no_plate"}
 
-        info = check_database(plate_text)
-        if info["allowed"]:
-            result = {
-                "placa": info.get("matched") or plate_text,
-                "liberado": True,
-                "fuzzy": bool(info.get("fuzzy")),
-                "veiculo": _map_veiculo(info["data"]),
-            }
-            if info.get("fuzzy"):
-                result["placaOriginalOcr"] = info.get("ocr", plate_text)
-            return result
-
-        return {"placa": plate_text, "liberado": False}
+        return _build_result(plate_text)
     finally:
-        try:
-            os.unlink(tmp.name)
-        except OSError:
-            pass
+        for p in tmp_paths:
+            try:
+                os.unlink(p)
+            except OSError:
+                pass
+
+
+def analyze_image_bytes(image_bytes: bytes) -> dict:
+    """Compat: pipeline para uma única imagem."""
+    return analyze_images_bytes([image_bytes])
 
 
 def decode_data_url(data_url: str) -> bytes:

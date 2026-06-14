@@ -31,13 +31,14 @@ interface AnalyzeApiResponse {
 }
 
 export async function analyzePlate(
-  imageData: string,
+  images: string | string[],
   onStep?: (step: ProgressStep) => void,
 ): Promise<PlateResult> {
   // A API faz tudo numa chamada; sinalizamos as etapas para a UI de loading.
   onStep?.("detect");
 
-  const reqPromise = apiPost<AnalyzeApiResponse>("/analyze", { imageData });
+  const frames = Array.isArray(images) ? images : [images];
+  const reqPromise = apiPost<AnalyzeApiResponse>("/analyze", { images: frames });
 
   // Avança o indicador visual enquanto a API processa.
   const t1 = setTimeout(() => onStep?.("ocr"), 600);
@@ -58,7 +59,7 @@ export async function analyzePlate(
   }
 
   return {
-    imagem: imageData,
+    imagem: frames[0],
     placa: res.placa ?? "—",
     liberado: Boolean(res.liberado),
     fuzzy: res.fuzzy,

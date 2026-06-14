@@ -51,8 +51,10 @@ class LoginResponse(BaseModel):
 
 
 class AnalyzeRequest(BaseModel):
-    # dataURL ("data:image/jpeg;base64,...") ou base64 puro
-    imageData: str
+    # Uma imagem (compat) — dataURL ou base64 puro
+    imageData: str | None = None
+    # Vários frames do mesmo veículo (multi-frame voting)
+    images: list[str] | None = None
 
 
 class VeiculoInfo(BaseModel):
@@ -88,12 +90,16 @@ def login(req: LoginRequest) -> dict:
 
 @app.post("/analyze", response_model=AnalyzeResponse)
 def analyze(req: AnalyzeRequest) -> dict:
+    raw = req.images if req.images else ([req.imageData] if req.imageData else [])
+    if not raw:
+        return {"error": "Nenhuma imagem enviada."}
+
     try:
-        image_bytes = pipeline.decode_data_url(req.imageData)
+        images = [pipeline.decode_data_url(x) for x in raw if x]
     except Exception:
         return {"error": "Imagem inválida."}
 
-    result = pipeline.analyze_image_bytes(image_bytes)
+    result = pipeline.analyze_images_bytes(images)
 
     if result.get("error") == "no_plate":
         return {

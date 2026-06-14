@@ -159,13 +159,13 @@ function PortariaScreen({
   const [error, setError] = useState<string | null>(null);
   const [analyzing, setAnalyzing] = useState(false);
 
-  async function handleCapture(dataUrl: string) {
+  async function handleCapture(frames: string[]) {
     setCameraOpen(false);
     setError(null);
     setAnalyzing(true);
     setStep(null);
     try {
-      const res = await analyzePlate(dataUrl, (s) => setStep(s));
+      const res = await analyzePlate(frames, (s) => setStep(s));
       onResult(res);
     } catch (e) {
       setError(
