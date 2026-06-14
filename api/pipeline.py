@@ -304,10 +304,26 @@ def extract_ocr_texts(result: object) -> list[str]:
     return texts
 
 
-def read_plate_candidates(image_path: str) -> tuple[list[str], np.ndarray | None]:
-    """Lê uma imagem e retorna TODAS as leituras candidatas de placa.
-    Fontes: (1) texto que o workflow do Roboflow retornar, (2) EasyOCR no
-    recorte. As candidatas alimentam a votação multi-frame em analyze_images.
+def _pred_width_px(pred: dict) -> float:
+    if "width" in pred:
+        try:
+            return float(pred["width"])
+        except (TypeError, ValueError):
+            return 0.0
+    if "x_min" in pred and "x_max" in pred:
+        try:
+            return float(pred["x_max"]) - float(pred["x_min"])
+        except (TypeError, ValueError):
+            return 0.0
+    return 0.0
+
+
+def read_plate_candidates(
+    image_path: str,
+) -> tuple[list[str], np.ndarray | None, float]:
+    """Lê uma imagem e retorna (candidatas, recorte, qualidade).
+    'qualidade' = largura relativa da placa (0..1); 0 = não medida/sem detecção.
+    Fontes das candidatas: (1) texto que o Roboflow retornar, (2) EasyOCR.
     """
     result = call_roboflow(image_path)
 
@@ -318,10 +334,15 @@ def read_plate_candidates(image_path: str) -> tuple[list[str], np.ndarray | None
     candidates.extend(roboflow_texts)  # peso 2: leitura de modelo treinado
 
     crop_cv: np.ndarray | None = None
+    quality = 0.0
     preds = extract_predictions(result)
     if preds:
         best = max(preds, key=lambda p: float(p.get("confidence", 0)))
         img_cv = cv2.imread(image_path)
+        img_w = img_cv.shape[1] if img_cv is not None else 0
+        pw = _pred_width_px(best)
+        if img_w and pw:
+            quality = pw / img_w
         crop_cv = crop_plate(img_cv, best)
         if crop_cv is not None:
             # (2) EasyOCR no recorte detectado.
@@ -329,12 +350,12 @@ def read_plate_candidates(image_path: str) -> tuple[list[str], np.ndarray | None
             if easy:
                 candidates.append(easy)
 
-    return candidates, crop_cv
+    return candidates, crop_cv, quality
 
 
 def detect_and_read(image_path: str) -> tuple[str, np.ndarray | None]:
     """Compat: melhor leitura única de uma imagem."""
-    candidates, crop_cv = read_plate_candidates(image_path)
+    candidates, crop_cv, _quality = read_plate_candidates(image_path)
     best = _vote_best(candidates)
     return best, crop_cv
 
@@ -528,7 +549,7 @@ def analyze_images_bytes(images: list[bytes]) -> dict:
             tmp.close()
             tmp_paths.append(tmp.name)
             try:
-                cands, _crop = read_plate_candidates(tmp.name)
+                cands, _crop, _quality = read_plate_candidates(tmp.name)
                 all_candidates.extend(cands)
             except Exception:
                 continue

@@ -1,9 +1,8 @@
 import { createFileRoute } from "@tanstack/react-router";
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { Button } from "@/components/sentry/Button";
 import { Card } from "@/components/sentry/Card";
 import { StatusBadge } from "@/components/sentry/StatusBadge";
-import { CameraCapture } from "@/components/sentry/CameraCapture";
 import { LoadingSteps } from "@/components/sentry/LoadingSteps";
 import { login, logout } from "@/services/auth";
 import { analyzePlate, type PlateResult, type ProgressStep } from "@/services/plateService";
@@ -147,6 +146,15 @@ function Field({ label, children }: { label: string; children: React.ReactNode }
 
 /* ------------------- PORTARIA ------------------- */
 
+function readAsDataURL(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result));
+    reader.onerror = () => reject(new Error("Falha ao ler a imagem."));
+    reader.readAsDataURL(file);
+  });
+}
+
 function PortariaScreen({
   onResult,
   onLogout,
@@ -154,25 +162,23 @@ function PortariaScreen({
   onResult: (r: PlateResult) => void;
   onLogout: () => void;
 }) {
-  const [cameraOpen, setCameraOpen] = useState(false);
   const [step, setStep] = useState<ProgressStep | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [analyzing, setAnalyzing] = useState(false);
+  const cameraRef = useRef<HTMLInputElement>(null);
+  const galeriaRef = useRef<HTMLInputElement>(null);
 
-  async function handleCapture(frames: string[]) {
-    setCameraOpen(false);
+  async function handleFile(file: File | undefined) {
+    if (!file) return;
     setError(null);
     setAnalyzing(true);
     setStep(null);
     try {
-      const res = await analyzePlate(frames, (s) => setStep(s));
+      const dataUrl = await readAsDataURL(file);
+      const res = await analyzePlate([dataUrl], (s) => setStep(s));
       onResult(res);
     } catch (e) {
-      setError(
-        e instanceof Error
-          ? e.message
-          : "Nenhuma placa detectada. Aponte para o veículo claramente.",
-      );
+      setError(e instanceof Error ? e.message : "Não foi possível ler a placa. Tente novamente.");
     } finally {
       setAnalyzing(false);
       setStep(null);
@@ -197,18 +203,26 @@ function PortariaScreen({
             <LoadingSteps current={step} />
           </Card>
         ) : (
-          <div className="w-full max-w-md flex flex-col items-center gap-6">
+          <div className="w-full max-w-md flex flex-col items-center gap-5">
             <p className="text-center text-[#94a3b8] text-base">
-              Aponte a câmera para a placa do veículo para verificar o acesso.
+              Tire uma foto da placa do veículo para verificar o acesso. Aproxime e use o zoom da
+              câmera se o veículo estiver longe.
             </p>
             <Button
               variant="hero"
               fullWidth
-              onClick={() => setCameraOpen(true)}
+              onClick={() => cameraRef.current?.click()}
               className="min-h-[140px]"
             >
               📷 ANALISAR PLACA
             </Button>
+            <button
+              type="button"
+              onClick={() => galeriaRef.current?.click()}
+              className="text-sm text-[#94a3b8] underline underline-offset-4"
+            >
+              Enviar foto da galeria
+            </button>
             {error && (
               <div className="w-full rounded-xl bg-[#7f1d1d] text-[#f87171] px-4 py-3 text-sm text-center">
                 {error}
@@ -218,9 +232,28 @@ function PortariaScreen({
         )}
       </main>
 
-      {cameraOpen && (
-        <CameraCapture onCapture={handleCapture} onCancel={() => setCameraOpen(false)} />
-      )}
+      {/* Câmera nativa do celular — foto em ALTA resolução (chave para o OCR) */}
+      <input
+        ref={cameraRef}
+        type="file"
+        accept="image/*"
+        capture="environment"
+        className="hidden"
+        onChange={(e) => {
+          handleFile(e.target.files?.[0]);
+          e.target.value = "";
+        }}
+      />
+      <input
+        ref={galeriaRef}
+        type="file"
+        accept="image/*"
+        className="hidden"
+        onChange={(e) => {
+          handleFile(e.target.files?.[0]);
+          e.target.value = "";
+        }}
+      />
     </div>
   );
 }
