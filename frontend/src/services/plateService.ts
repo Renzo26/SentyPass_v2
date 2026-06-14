@@ -7,6 +7,8 @@ export interface VeiculoInfo {
   morador?: string;
   apartamento?: string;
   bloco?: string;
+  telefone?: string;
+  foto_url?: string;
   [key: string]: string | undefined;
 }
 

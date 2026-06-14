@@ -104,7 +104,7 @@ def extract_predictions(result: object) -> list[dict]:
 
     plate_preds = [
         p for p in found
-        if isinstance(p, dict) and p.get("class", "").lower() in
+        if isinstance(p, dict) and p.get("class", "").strip().lower() in
            [c.lower() for c in PLATE_CLASSES]
     ]
     return plate_preds if plate_preds else found
@@ -405,8 +405,11 @@ def login_porteiro(email: str, senha: str) -> dict:
         return {"ok": False, "error": "Credenciais inválidas."}
 
     try:
+        # IMPORTANTE: usar o cliente 'auth', que acabou de autenticar. Sob RLS,
+        # só a sessão autenticada enxerga a tabela 'perfis'. (O cliente 'db'
+        # anônimo retornaria vazio e bloquearia o login indevidamente.)
         perfil = (
-            get_supabase_db().table("perfis").select("tipo")
+            auth.table("perfis").select("tipo")
             .eq("id", resp.user.id).single().execute()
         )
         tipo = perfil.data.get("tipo", "") if perfil.data else ""
@@ -425,30 +428,58 @@ def login_porteiro(email: str, senha: str) -> dict:
 
 # ─── ORQUESTRAÇÃO DA ANÁLISE ────────────────────────────────
 
-def _map_veiculo(data: dict) -> dict:
-    """Mapeia uma linha de 'veiculos' para o shape esperado pelo front."""
-    skip = {"id", "created_at", "updated_at", "user_id"}
-    veiculo: dict = {}
-    # campos conhecidos pela UI
-    for key in ("modelo", "cor", "morador", "apartamento", "bloco"):
-        if data.get(key) is not None:
-            veiculo[key] = str(data[key])
-    # campos extras (mantém todos os demais como string)
-    for k, v in data.items():
-        if k in skip or k in veiculo or v is None:
-            continue
-        veiculo[k] = str(v)
-    return veiculo
+def _fetch_owner(perfil_id: str | None) -> dict:
+    """Busca os dados do morador dono do veículo (tabela 'perfis').
+    Requer service_role: sob RLS, o porteiro só enxerga o próprio perfil.
+    """
+    if not perfil_id:
+        return {}
+    try:
+        resp = (
+            get_supabase_db().table("perfis")
+            .select("nome_completo,bloco,unidade,telefone")
+            .eq("id", perfil_id).single().execute()
+        )
+        return resp.data or {}
+    except Exception:
+        return {}
+
+
+def _clean(v: object) -> str:
+    return str(v).strip()
+
+
+def _shape_vehicle(veiculo: dict, owner: dict) -> dict:
+    """Monta o objeto exibido ao porteiro: dados do carro (veiculos) +
+    dados do morador (perfis). Inclui a foto cadastrada para conferência."""
+    out: dict = {}
+    if veiculo.get("modelo"):
+        out["modelo"] = _clean(veiculo["modelo"])
+    if veiculo.get("cor"):
+        out["cor"] = _clean(veiculo["cor"])
+    if owner.get("nome_completo"):
+        out["morador"] = _clean(owner["nome_completo"])
+    if owner.get("bloco"):
+        out["bloco"] = _clean(owner["bloco"])
+    if owner.get("unidade"):
+        out["apartamento"] = _clean(owner["unidade"])
+    if owner.get("telefone"):
+        out["telefone"] = _clean(owner["telefone"])
+    if veiculo.get("foto_url"):
+        out["foto_url"] = _clean(veiculo["foto_url"])
+    return out
 
 
 def _build_result(plate_text: str) -> dict:
     info = check_database(plate_text)
     if info["allowed"]:
+        data = info["data"]
+        owner = _fetch_owner(data.get("perfil_id"))
         result = {
             "placa": info.get("matched") or plate_text,
             "liberado": True,
             "fuzzy": bool(info.get("fuzzy")),
-            "veiculo": _map_veiculo(info["data"]),
+            "veiculo": _shape_vehicle(data, owner),
         }
         if info.get("fuzzy"):
             result["placaOriginalOcr"] = info.get("ocr", plate_text)

@@ -248,8 +248,18 @@ const FIELD_LABELS: Record<string, string> = {
   observacoes: "Observações",
 };
 
-// Colunas que não fazem sentido exibir para o porteiro.
-const HIDDEN_FIELDS = new Set(["id", "user_id", "created_at", "updated_at", "placa"]);
+// Colunas que não viram "campo de texto" (internas ou tratadas à parte, como a foto).
+const HIDDEN_FIELDS = new Set([
+  "id",
+  "user_id",
+  "perfil_id",
+  "created_at",
+  "updated_at",
+  "placa",
+  "foto_url",
+  "status",
+  "motivo_rejeicao",
+]);
 
 function labelFor(key: string): string {
   const normalized = key.toLowerCase();
@@ -265,6 +275,8 @@ function ResultadoScreen({ result, onBack }: { result: PlateResult; onBack: () =
         ([k, v]) => !HIDDEN_FIELDS.has(k.toLowerCase()) && v != null && String(v).trim() !== "",
       )
     : [];
+
+  const fotoCadastrada = veiculo?.foto_url;
 
   return (
     <div className="min-h-screen flex flex-col">
@@ -302,6 +314,20 @@ function ResultadoScreen({ result, onBack }: { result: PlateResult; onBack: () =
               <p className="text-sm text-[#94a3b8]">
                 Veículo autorizado, mas sem dados de cadastro preenchidos.
               </p>
+            )}
+            {fotoCadastrada && (
+              <div className="mt-4">
+                <div className="text-[#94a3b8] text-xs uppercase tracking-wide mb-2">
+                  Foto cadastrada (confira com o veículo)
+                </div>
+                <div className="rounded-xl overflow-hidden border border-white/10 bg-black">
+                  <img
+                    src={fotoCadastrada}
+                    alt="Veículo cadastrado"
+                    className="w-full h-auto object-cover"
+                  />
+                </div>
+              </div>
             )}
             {fuzzy && (
               <div className="mt-4 rounded-xl bg-[#78350f] text-[#fcd34d] px-4 py-3 text-sm">
