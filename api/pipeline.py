@@ -281,29 +281,6 @@ def is_valid_plate(text: str) -> bool:
     return bool(_PLATE_RE.match(text or ""))
 
 
-def extract_ocr_texts(result: object) -> list[str]:
-    """Procura, na resposta do Roboflow, strings que pareçam placa.
-    Cobre workflows que já incluem um bloco de OCR/reconhecimento — nesse caso
-    o texto vem mais preciso que o EasyOCR genérico.
-    """
-    texts: list[str] = []
-
-    def walk(obj):
-        if isinstance(obj, dict):
-            for v in obj.values():
-                walk(v)
-        elif isinstance(obj, list):
-            for item in obj:
-                walk(item)
-        elif isinstance(obj, str):
-            cand = normalize_plate(obj)
-            if is_valid_plate(cand):
-                texts.append(cand)
-
-    walk(result)
-    return texts
-
-
 def _pred_width_px(pred: dict) -> float:
     if "width" in pred:
         try:
@@ -323,16 +300,12 @@ def read_plate_candidates(
 ) -> tuple[list[str], np.ndarray | None, float]:
     """Lê uma imagem e retorna (candidatas, recorte, qualidade).
     'qualidade' = largura relativa da placa (0..1); 0 = não medida/sem detecção.
-    Fontes das candidatas: (1) texto que o Roboflow retornar, (2) EasyOCR.
+    Leitura via EasyOCR no recorte detectado (mesmo pipeline do app desktop).
+    O workflow do Roboflow só detecta/segmenta a placa — não faz OCR.
     """
     result = call_roboflow(image_path)
 
     candidates: list[str] = []
-    # (1) Texto do próprio Roboflow (se o workflow tiver OCR) — peso maior.
-    roboflow_texts = extract_ocr_texts(result)
-    candidates.extend(roboflow_texts)
-    candidates.extend(roboflow_texts)  # peso 2: leitura de modelo treinado
-
     crop_cv: np.ndarray | None = None
     quality = 0.0
     preds = extract_predictions(result)
@@ -345,7 +318,6 @@ def read_plate_candidates(
             quality = pw / img_w
         crop_cv = crop_plate(img_cv, best)
         if crop_cv is not None:
-            # (2) EasyOCR no recorte detectado.
             easy = ocr_plate(get_ocr(), crop_cv)
             if easy:
                 candidates.append(easy)
