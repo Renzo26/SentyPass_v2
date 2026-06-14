@@ -1,0 +1,14 @@
+# SentryPass — API web (FastAPI)
+# Use Python 3.11: python311 -m pip install -r requirements.txt
+#
+# Reaproveita o mesmo pipeline do app desktop (Roboflow + EasyOCR + Supabase),
+# sem dependência de GUI (customtkinter).
+
+fastapi>=0.110.0
+uvicorn[standard]>=0.29.0
+opencv-python-headless>=4.9.0
+numpy>=1.26.0
+Pillow>=10.0.0
+easyocr>=1.7.1
+supabase>=2.3.0
+requests>=2.31.0

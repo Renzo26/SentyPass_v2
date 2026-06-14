@@ -1,0 +1,42 @@
+services:
+  backend:
+    build:
+      context: ./api
+      dockerfile: Dockerfile
+    environment:
+      SUPABASE_URL: ${SUPABASE_URL}
+      SUPABASE_KEY: ${SUPABASE_KEY}
+      ROBOFLOW_API_KEY: ${ROBOFLOW_API_KEY}
+      ROBOFLOW_WORKSPACE: ${ROBOFLOW_WORKSPACE}
+      ROBOFLOW_WORKFLOW: ${ROBOFLOW_WORKFLOW}
+      CORS_ORIGINS: ${CORS_ORIGINS}
+    restart: unless-stopped
+    networks:
+      easypanel:
+        aliases:
+          - sentrypass_backend
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8080/health')"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+      args:
+        VITE_API_URL: ${VITE_API_URL}
+    depends_on:
+      backend:
+        condition: service_healthy
+    restart: unless-stopped
+    networks:
+      easypanel:
+        aliases:
+          - sentrypass_frontend
+
+networks:
+  easypanel:
+    external: true

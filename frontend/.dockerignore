@@ -1,0 +1,13 @@
+node_modules
+.output
+dist
+dist-ssr
+.vinxi
+.tanstack
+.nitro
+.wrangler
+.git
+*.log
+.env
+.env.local
+.DS_Store
