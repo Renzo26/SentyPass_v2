@@ -37,6 +37,12 @@ ROBOFLOW_WORKSPACE = os.environ.get("ROBOFLOW_WORKSPACE", "llativo")
 ROBOFLOW_WORKFLOW = os.environ.get("ROBOFLOW_WORKFLOW", "custom-workflow-5")
 PLATE_CLASSES = ["number plate", "license plate"]
 
+# Edge Function que faz a consulta privilegiada (service_role fica no Lovable).
+# Default: <SUPABASE_URL>/functions/v1/lookup-plate
+LOOKUP_FUNCTION_URL = os.environ.get(
+    "LOOKUP_FUNCTION_URL", f"{SUPABASE_URL}/functions/v1/lookup-plate"
+)
+
 VEHICLES_TABLES = ["veiculos"]
 PLATE_COLUMNS = ["placa"]
 
@@ -470,21 +476,41 @@ def _shape_vehicle(veiculo: dict, owner: dict) -> dict:
     return out
 
 
+def lookup_plate_remote(plate: str) -> dict:
+    """Consulta o cadastro via Edge Function (que usa service_role no Supabase).
+    Mantém a service_role fora do backend — aqui só usamos a chave anon como
+    Bearer para invocar a função.
+    """
+    headers = {
+        "Content-Type": "application/json",
+        "Authorization": f"Bearer {SUPABASE_KEY}",
+        "apikey": SUPABASE_KEY,
+    }
+    resp = requests.post(
+        LOOKUP_FUNCTION_URL, json={"plate": plate}, headers=headers, timeout=30
+    )
+    resp.raise_for_status()
+    return resp.json()
+
+
 def _build_result(plate_text: str) -> dict:
-    info = check_database(plate_text)
-    if info["allowed"]:
-        data = info["data"]
-        owner = _fetch_owner(data.get("perfil_id"))
+    try:
+        data = lookup_plate_remote(plate_text)
+    except Exception as e:
+        return {"error": f"Falha ao consultar o cadastro: {e}"}
+
+    if data.get("liberado"):
         result = {
-            "placa": info.get("matched") or plate_text,
+            "placa": data.get("placa") or plate_text,
             "liberado": True,
-            "fuzzy": bool(info.get("fuzzy")),
-            "veiculo": _shape_vehicle(data, owner),
+            "fuzzy": bool(data.get("fuzzy")),
+            "veiculo": data.get("veiculo") or {},
         }
-        if info.get("fuzzy"):
-            result["placaOriginalOcr"] = info.get("ocr", plate_text)
+        if data.get("placaOriginalOcr"):
+            result["placaOriginalOcr"] = data["placaOriginalOcr"]
         return result
-    return {"placa": plate_text, "liberado": False}
+
+    return {"placa": data.get("placa") or plate_text, "liberado": False}
 
 
 def analyze_images_bytes(images: list[bytes]) -> dict:
