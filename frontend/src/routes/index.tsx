@@ -85,9 +85,7 @@ function LoginScreen({ onLogged }: { onLogged: () => void }) {
       <Card className="w-full max-w-md">
         <div className="text-center mb-6">
           <h1 className="text-3xl font-extrabold text-[#60a5fa] tracking-tight">SentryPass</h1>
-          <p className="text-[#94a3b8] mt-1 text-sm">
-            Acesso restrito a porteiros autorizados
-          </p>
+          <p className="text-[#94a3b8] mt-1 text-sm">Acesso restrito a porteiros autorizados</p>
         </div>
         <form onSubmit={submit} className="flex flex-col gap-4">
           <Field label="E-mail">
@@ -169,8 +167,12 @@ function PortariaScreen({
     try {
       const res = await analyzePlate(dataUrl, (s) => setStep(s));
       onResult(res);
-    } catch {
-      setError("Nenhuma placa detectada. Aponte para o veículo claramente.");
+    } catch (e) {
+      setError(
+        e instanceof Error
+          ? e.message
+          : "Nenhuma placa detectada. Aponte para o veículo claramente.",
+      );
     } finally {
       setAnalyzing(false);
       setStep(null);
@@ -225,8 +227,45 @@ function PortariaScreen({
 
 /* ------------------- RESULTADO ------------------- */
 
+// Rótulos amigáveis para as colunas da tabela "veiculos".
+// Qualquer coluna não listada aparece com o nome capitalizado automaticamente.
+const FIELD_LABELS: Record<string, string> = {
+  modelo: "Modelo",
+  marca: "Marca",
+  cor: "Cor",
+  ano: "Ano",
+  morador: "Morador",
+  proprietario: "Proprietário",
+  proprietário: "Proprietário",
+  apartamento: "Apartamento",
+  apto: "Apartamento",
+  unidade: "Unidade",
+  bloco: "Bloco",
+  torre: "Torre",
+  vaga: "Vaga",
+  telefone: "Telefone",
+  observacao: "Observação",
+  observacoes: "Observações",
+};
+
+// Colunas que não fazem sentido exibir para o porteiro.
+const HIDDEN_FIELDS = new Set(["id", "user_id", "created_at", "updated_at", "placa"]);
+
+function labelFor(key: string): string {
+  const normalized = key.toLowerCase();
+  if (FIELD_LABELS[normalized]) return FIELD_LABELS[normalized];
+  return key.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
+}
+
 function ResultadoScreen({ result, onBack }: { result: PlateResult; onBack: () => void }) {
   const { imagem, placa, liberado, fuzzy, placaOriginalOcr, veiculo } = result;
+
+  const campos = veiculo
+    ? Object.entries(veiculo).filter(
+        ([k, v]) => !HIDDEN_FIELDS.has(k.toLowerCase()) && v != null && String(v).trim() !== "",
+      )
+    : [];
+
   return (
     <div className="min-h-screen flex flex-col">
       <header className="sticky top-0 z-10 bg-[#0f172a]/95 backdrop-blur border-b border-white/5 px-5 py-4">
@@ -240,9 +279,7 @@ function ResultadoScreen({ result, onBack }: { result: PlateResult; onBack: () =
         </div>
 
         <div className="text-center">
-          <div className="text-xs uppercase tracking-widest text-[#94a3b8]">
-            Placa lida (OCR)
-          </div>
+          <div className="text-xs uppercase tracking-widest text-[#94a3b8]">Placa lida (OCR)</div>
           <div className="mt-1 text-4xl font-black tracking-widest text-[#f1f5f9] font-mono">
             {placa}
           </div>
@@ -255,13 +292,17 @@ function ResultadoScreen({ result, onBack }: { result: PlateResult; onBack: () =
             <h2 className="text-sm uppercase tracking-wider text-[#94a3b8] mb-3">
               Dados do veículo
             </h2>
-            <dl className="grid grid-cols-2 gap-x-4 gap-y-3 text-sm">
-              <Info label="Modelo" value={veiculo.modelo} />
-              <Info label="Cor" value={veiculo.cor} />
-              <Info label="Morador" value={veiculo.morador} />
-              <Info label="Apartamento" value={veiculo.apartamento} />
-              <Info label="Bloco" value={veiculo.bloco} />
-            </dl>
+            {campos.length > 0 ? (
+              <dl className="grid grid-cols-2 gap-x-4 gap-y-3 text-sm">
+                {campos.map(([k, v]) => (
+                  <Info key={k} label={labelFor(k)} value={String(v)} />
+                ))}
+              </dl>
+            ) : (
+              <p className="text-sm text-[#94a3b8]">
+                Veículo autorizado, mas sem dados de cadastro preenchidos.
+              </p>
+            )}
             {fuzzy && (
               <div className="mt-4 rounded-xl bg-[#78350f] text-[#fcd34d] px-4 py-3 text-sm">
                 ⚠ OCR leu '{placaOriginalOcr ?? "—"}' → correspondência aproximada com a placa
@@ -274,8 +315,8 @@ function ResultadoScreen({ result, onBack }: { result: PlateResult; onBack: () =
         {!liberado && (
           <Card>
             <p className="text-[#f1f5f9] text-base">
-              Placa '<span className="font-mono font-bold">{placa}</span>' não encontrada.
-              Veículo não autorizado a entrar.
+              Placa '<span className="font-mono font-bold">{placa}</span>' não encontrada. Veículo
+              não autorizado a entrar.
             </p>
           </Card>
         )}

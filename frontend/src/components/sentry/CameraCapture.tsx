@@ -17,8 +17,14 @@ export function CameraCapture({ onCapture, onCancel }: Props) {
     let cancelled = false;
     async function start() {
       try {
+        // Pede a maior resolução possível da câmera traseira — quanto mais
+        // pixels na placa, melhor a leitura do OCR.
         const stream = await navigator.mediaDevices.getUserMedia({
-          video: { facingMode: { ideal: "environment" } },
+          video: {
+            facingMode: { ideal: "environment" },
+            width: { ideal: 1920 },
+            height: { ideal: 1080 },
+          },
           audio: false,
         });
         if (cancelled) {
@@ -31,7 +37,7 @@ export function CameraCapture({ onCapture, onCancel }: Props) {
           await videoRef.current.play().catch(() => {});
         }
         setStreamReady(true);
-      } catch (e) {
+      } catch {
         setError("Não foi possível acessar a câmera. Use o envio de arquivo abaixo.");
       }
     }
@@ -46,12 +52,13 @@ export function CameraCapture({ onCapture, onCancel }: Props) {
     const video = videoRef.current;
     if (!video) return;
     const canvas = document.createElement("canvas");
-    canvas.width = video.videoWidth || 1280;
-    canvas.height = video.videoHeight || 720;
+    canvas.width = video.videoWidth || 1920;
+    canvas.height = video.videoHeight || 1080;
     const ctx = canvas.getContext("2d");
     if (!ctx) return;
     ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
-    const dataUrl = canvas.toDataURL("image/jpeg", 0.85);
+    // Qualidade alta (0.95) para preservar os caracteres da placa.
+    const dataUrl = canvas.toDataURL("image/jpeg", 0.95);
     streamRef.current?.getTracks().forEach((t) => t.stop());
     onCapture(dataUrl);
   }
@@ -70,12 +77,18 @@ export function CameraCapture({ onCapture, onCancel }: Props) {
   return (
     <div className="fixed inset-0 z-50 bg-black flex flex-col">
       <div className="relative flex-1 flex items-center justify-center overflow-hidden">
-        <video
-          ref={videoRef}
-          playsInline
-          muted
-          className="w-full h-full object-cover"
-        />
+        <video ref={videoRef} playsInline muted className="w-full h-full object-cover" />
+
+        {/* Guia de enquadramento — ajuda a alinhar a placa e chegar perto */}
+        {streamReady && !error && (
+          <div className="pointer-events-none absolute inset-0 flex flex-col items-center justify-center">
+            <div className="w-[78%] max-w-sm aspect-[3/1] rounded-xl border-2 border-[#60a5fa]/90 shadow-[0_0_0_9999px_rgba(0,0,0,0.35)]" />
+            <p className="mt-4 px-4 text-center text-sm text-white/90 bg-black/40 rounded-full py-1.5">
+              Encaixe a placa no retângulo e aproxime
+            </p>
+          </div>
+        )}
+
         {!streamReady && !error && (
           <div className="absolute inset-0 flex items-center justify-center text-[#94a3b8]">
             Iniciando câmera...
